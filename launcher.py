@@ -18,19 +18,24 @@ class CProgramLauncher:
         if not os.path.exists(self.build_dir):
             os.makedirs(self.build_dir)
 
-        # СПИСОК ВАШИХ ТРЁХ ФАЙЛОВ (укажите точные имена)
-        self.cpp_files = ['ConsoleApplication1_1.c', 'script1.cpp', 'main.cpp']  # ← ИЗМЕНИТЕ НА ВАШИ ИМЕНА
+        # Автоматически находим все .cpp и .c файлы в папке
+        self.cpp_files = []
+        for file in os.listdir(self.base_dir):
+            if file.endswith(('.cpp', '.c')) and os.path.isfile(os.path.join(self.base_dir, file)):
+                self.cpp_files.append(file)
+        self.cpp_files.sort()
         
-        # Проверяем, какие файлы реально существуют
-        self.existing_files = [f for f in self.cpp_files if os.path.exists(os.path.join(self.base_dir, f))]
+        # Удаляем ненужные файлы из списка
+        files_to_remove = ['script2.cpp', 'test1.cpp']  # Удаляем script2.cpp и test1.cpp
+        self.cpp_files = [f for f in self.cpp_files if f not in files_to_remove]
         
-        if not self.existing_files:
-            self.existing_files = [f for f in os.listdir(self.base_dir) if f.endswith('.cpp') and os.path.isfile(os.path.join(self.base_dir, f))]
-            self.existing_files.sort()
+        # Если после удаления файлов не осталось - показываем сообщение
+        if not self.cpp_files:
+            self.log("⚠️ Не найдено C/C++ файлов для компиляции", "warning")
 
         # --- Интерфейс ---
         # Заголовок
-        tk.Label(root, text="Запуск всех трёх C++ программ", font=("Arial", 14, "bold")).pack(pady=10)
+        tk.Label(root, text="Запуск всех C++ программ", font=("Arial", 14, "bold")).pack(pady=10)
         
         # Информация о файлах
         info_frame = tk.Frame(root)
@@ -38,7 +43,7 @@ class CProgramLauncher:
         
         tk.Label(info_frame, text="Будут запущены:", font=("Arial", 10)).pack(side=tk.LEFT)
         
-        files_text = ", ".join(self.existing_files)
+        files_text = ", ".join(self.cpp_files) if self.cpp_files else "Нет файлов"
         tk.Label(info_frame, text=files_text, font=("Arial", 10, "bold"), fg="blue").pack(side=tk.LEFT, padx=5)
         
         # Кнопки
@@ -66,7 +71,7 @@ class CProgramLauncher:
         self.listbox = tk.Listbox(root, selectmode=tk.SINGLE, height=4)
         self.listbox.pack(padx=10, fill=tk.BOTH, expand=True)
         
-        for file in self.existing_files:
+        for file in self.cpp_files:
             self.listbox.insert(tk.END, file)
         
         # Область для вывода логов
@@ -110,8 +115,18 @@ class CProgramLauncher:
         self.status_label.config(text=message)
         self.root.update()
 
+    def is_graphics_program(self, filepath):
+        """Проверяет, использует ли программа OpenGL/GLUT"""
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                graphics_keywords = ['GL/', 'GLUT', 'OpenGL', 'glut', 'glClear', 'glBegin']
+                return any(keyword in content for keyword in graphics_keywords)
+        except:
+            return False
+
     def compile_and_run(self, filename, index=None, total=None):
-        """Компилирует и запускает один cpp файл"""
+        """Компилирует и запускает один cpp/c файл"""
         
         filepath = os.path.join(self.base_dir, filename)
         
@@ -129,11 +144,41 @@ class CProgramLauncher:
         self.log(f"\n{'='*60}", "info")
         self.log(f"{progress}Компиляция {filename}...", "compile")
         
-        # Команда компиляции для C++
-        compile_command = ["g++", filepath, "-o", executable_path]
+        # ФОРМИРУЕМ КОМАНДУ КОМПИЛЯЦИИ
+        is_graphics = self.is_graphics_program(filepath)
+        
+        if sys.platform == "darwin":  # macOS
+            if is_graphics:
+                # Правильная команда для macOS с GLUT
+                compile_command = [
+                    "clang++", filepath, "-o", executable_path,
+                    "-framework", "OpenGL",
+                    "-framework", "GLUT",
+                    "-DGL_SILENCE_DEPRECATION"
+                ]
+                self.log("🔧 macOS: компиляция с OpenGL и GLUT", "compile")
+            else:
+                compile_command = ["clang++", filepath, "-o", executable_path]
+                self.log("🔧 macOS: обычная компиляция", "compile")
+        
+        elif sys.platform == "win32":  # Windows
+            if is_graphics:
+                compile_command = ["g++", filepath, "-o", executable_path, "-lopengl32", "-lfreeglut"]
+                self.log("🔧 Windows: компиляция с OpenGL", "compile")
+            else:
+                compile_command = ["g++", filepath, "-o", executable_path]
+                self.log("🔧 Windows: обычная компиляция", "compile")
+        
+        else:  # Linux
+            if is_graphics:
+                compile_command = ["g++", filepath, "-o", executable_path, "-lGL", "-lglut"]
+                self.log("🔧 Linux: компиляция с OpenGL", "compile")
+            else:
+                compile_command = ["g++", filepath, "-o", executable_path]
+                self.log("🔧 Linux: обычная компиляция", "compile")
         
         try:
-            # Компиляция
+            self.log(f"🔨 Выполняется: {' '.join(compile_command)}", "compile")
             process = subprocess.run(compile_command, capture_output=True, text=True, timeout=30)
             
             if process.returncode != 0:
@@ -155,8 +200,9 @@ class CProgramLauncher:
             return True
             
         except FileNotFoundError:
-            self.log("❌ Ошибка: Компилятор 'g++' не найден!", "error")
-            self.log("Установите MinGW (Windows) или build-essential (Linux/Mac)", "warning")
+            self.log("❌ Ошибка: Компилятор не найден!", "error")
+            if sys.platform == "darwin":
+                self.log("Установите Xcode Command Line Tools: xcode-select --install", "warning")
             return False
         except subprocess.TimeoutExpired:
             self.log(f"❌ Ошибка: Компиляция {filename} заняла слишком много времени", "error")
@@ -168,8 +214,8 @@ class CProgramLauncher:
     def run_all(self):
         """Запускает ВСЕ cpp файлы по порядку"""
         
-        if not self.existing_files:
-            self.log("❌ Нет файлов .cpp для запуска!", "error")
+        if not self.cpp_files:
+            self.log("❌ Нет файлов .cpp или .c для запуска!", "error")
             messagebox.showerror("Ошибка", "Нет C++ файлов в папке!")
             return
         
@@ -177,10 +223,10 @@ class CProgramLauncher:
         self.log("🚀 ЗАПУСК ВСЕХ ПРОГРАММ", "success")
         self.log("="*60, "info")
         
-        total = len(self.existing_files)
+        total = len(self.cpp_files)
         success_count = 0
         
-        for i, filename in enumerate(self.existing_files, 1):
+        for i, filename in enumerate(self.cpp_files, 1):
             self.update_status(f"Запуск {filename}...")
             if self.compile_and_run(filename, i, total):
                 success_count += 1
